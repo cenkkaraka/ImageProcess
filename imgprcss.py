@@ -1,7 +1,8 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-import math
+from skimage.metrics import structural_similarity as ssim
+from scipy.stats import entropy
 def calculate_clip_limit(hist,clip_pixels):
     clipped = np.copy(hist)
     while(clip_pixels > 0 ):
@@ -54,58 +55,12 @@ def apply_clahe_to_tile(tile , clip_limit):
     hist , bins = np.histogram(tile.flatten(), 65535, [0, 65535])
     new_hist = clip_histogram(hist , clip_limit)
     cdf = new_hist.cumsum()
-    cdf_normalized =  np.floor((cdf - cdf.min()) / (cdf.max() - cdf.min()) *255).astype(np.uint8)
+    cdf_normalized =  np.floor((cdf - cdf.min()) / (cdf.max() - cdf.min()) *255)
     
     #print(f'cdf max = {cdf_normalized.max()},cdf min={cdf_normalized.min()}')
     tile_equalized  = cdf_normalized[tile].astype("uint8")
     
     return tile_equalized , cdf_normalized
-def De(temp):
-    temp_hist, _ = np.histogram(temp.flatten(),65535,[0,65535])
-    
-    temp_hist = temp_hist / temp_hist.sum()
-
-    # Step 4: Calculate entropy using the formula
-    temp_hist = temp_hist[temp_hist > 0]
-    entropy = -np.sum(temp_hist * np.log2(temp_hist))
-    
-    return entropy
-    
-def Psnr(temp,tile):
-    mse = np.mean((tile - temp) ** 2)
-    if mse == 0:
-        return float('inf')  # Infinite PSNR for identical images
-    return 20 * np.log10((65535) / math.sqrt(mse))
-
-    
-    
-def compute_clr(tile,clr):
-    clr_counter,optimumClr,maxDE,maxPSNR = 0,0,0,0
-    for clr_counter in clr:
-        temp,_ = apply_clahe_to_tile(tile, clr_counter)
-        de =De(temp)
-        psnr =Psnr(temp,tile)
-        if de > maxDE and psnr >maxPSNR:
-            optimumClr = clr_counter
-            maxDE , maxPSNR = de , psnr
-    #print(f'optCLR{optimumClr}')
-    return optimumClr        
-def woa(tile,clr):
-    maxDE,maxPSNR ,optimumCl = 0,0,0
-    a= clr/10 
-    i=0
-    while (i+1)* a < 99*a:
-        temp_cl = (i+1)* a
-        temp,_ = apply_clahe_to_tile(tile, temp_cl)
-        de =De(temp)
-        psnr =Psnr(temp,tile)
-        if de > maxDE and psnr >maxPSNR:
-            optimumCl= temp_cl
-            maxDE , maxPSNR = de , psnr
-            i+= 5
-        i+=5
-    #print(f'optimumCl, maxDE , maxPSNR: {optimumCl,maxDE , maxPSNR}')
-    return optimumCl   
 
 def clahe_apply(image , tile_grid_size ,clip_limit):
     h, w = image.shape
@@ -119,9 +74,6 @@ def clahe_apply(image , tile_grid_size ,clip_limit):
             x1 , y1 = i * tile_h , j * tile_w
             x2 , y2 = min(x1 + tile_h,h), min(y1 + tile_w,w)
             tile = image[x1:x2 , y1:y2]
-            clr =[0.1000,0.0100,0.0010]
-            opt_clr = compute_clr(tile,clr)
-            clip_limit = woa(tile,opt_clr)
             clahe_tile, cdf_to_keep = apply_clahe_to_tile(tile, clip_limit)
             #update output
             clahe_image[x1:x2 , y1:y2]= clahe_tile
@@ -226,6 +178,8 @@ def clahe_apply(image , tile_grid_size ,clip_limit):
             elif int(a) == 1:
                 valueA, valueB = calc_value(origin_value,tile_h,tile_w,min_x ,max_x ,min_y , max_y,tile_cdf_dict,a)
                 new_pixel_value = (valueA*distB + valueB * distA)/(distB +distA)
+                if new_pixel_value <0:
+                    print(new_pixel_value)
                 output_image[i,j]= new_pixel_value
                 
             else:
@@ -251,6 +205,7 @@ def calc_value(origin_value,tile_h,tile_w,min_x ,max_x ,min_y , max_y,tile_cdf_d
         temp_cdf =tile_cdf_dict[(tileD_h,tileD_w)]
         valueD = temp_cdf[origin_value]
         return valueA,valueB,valueC,valueD
+    
     elif int(a) ==1:
         tileA_h,tileA_w = min_x // tile_h,min_y // tile_w
         temp_cdf =tile_cdf_dict[(tileA_h,tileA_w)]
@@ -286,24 +241,18 @@ def dist(i,j,min_x ,max_x ,min_y , max_y,a):
     
 
 
-image = cv2.imread('FLIR_00001.tiff', cv2.IMREAD_UNCHANGED)
-clahe ,output_image = clahe_apply(image , (4,5), 5)
+image = cv2.imread('1.3.6.1.4.1.14519.5.2.1.6279.6001.105756658031515062000744821260_slice60.png', cv2.IMREAD_UNCHANGED)
+clahe ,output_image = clahe_apply(image , (4,4),0.3)
 #print(f'after clahe:{output_image.max(),output_image.min(),output_image.sum(),output_image.size}')
-blurred = cv2.GaussianBlur(image,(5,5),2)
-output_image = (output_image * (image/(blurred))**15)
-#print(f'after equation:{output_image.max(),output_image.min(),output_image.sum(),output_image.size}')
-output_image = np.clip(output_image,0,255).astype(np.uint8)
-#print(f'after clipping: {output_image.max(),output_image.min(),output_image.sum(),output_image.size}')
-original_hist, _ =  np.histogram(image.flatten(), 65535, [0, 65535])
-equalized_hist, _ = np.histogram(output_image.flatten(), 65535, [0, 65535])
-de100 =De(output_image)
-psnr100 =Psnr(output_image,image)
-
-print(f'entropy and psnr:{de100, psnr100}')
-
+blurred = cv2.GaussianBlur(image,(5,5),1)
+output_image = (output_image * (image/(blurred))**0.5)
+hist, _ = np.histogram(output_image.flatten(), bins=256, range=(0, 256))
 #cv2.imwrite('D:/Finals/ACL_BBCE/image_2215/ACL_BBCE.png',output_image)
+img_entropy = entropy(hist, base=2)
+img_ssim = ssim(image, output_image, data_range=output_image.max() - output_image.min())
+print(f'entropy ={(img_entropy-5)/3}, ssim = {img_ssim}')
 plt.subplot(1,2,1)
-plt.imshow(blurred, cmap='gray')
+plt.imshow(clahe, cmap='gray')
 plt.axis('off')
 plt.subplot(1,2,2)
 plt.imshow(output_image, cmap='gray')
